@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: iskaar-backend
+  namespace: iskaar
+  labels:
+    app.kubernetes.io/name: iskaar-backend
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: iskaar
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iskaar-backend
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: iskaar
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: iskaar
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
