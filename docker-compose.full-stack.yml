@@ -15,7 +15,7 @@ services:
 
   backend:
     build:
-      context: ./iskaarBE/iskaar-be
+      context: ../iskaarBE/iskaar-be
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/iskaar
       SPRING_DATASOURCE_USERNAME: iskaar
@@ -29,7 +29,7 @@ services:
 
   frontend:
     build:
-      context: ./iskaarFE/iskaar-frontend
+      context: ../iskaarFE/iskaar-frontend
     ports:
       - "3000:80"
     depends_on:

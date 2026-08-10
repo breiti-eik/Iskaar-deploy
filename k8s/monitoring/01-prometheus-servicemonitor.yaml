@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: iskaar-backend
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: iskaar-backend
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: iskaar
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - iskaar
+  selector:
+    matchLabels:
+      app: iskaar-backend
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      scheme: http
+      interval: 15s
+      scrapeTimeout: 10s

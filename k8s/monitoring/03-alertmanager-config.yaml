@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  labels:
+    app: alertmanager
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'default-webhook'
+      routes:
+        - match:
+            severity: critical
+          receiver: 'critical-webhook'
+
+    receivers:
+      - name: 'default-webhook'
+        webhook_configs:
+          - url: 'http://webhook-receiver.monitoring.svc.cluster.local:5001/alerts'
+            send_resolved: true
+            http_config:
+              follow_redirects: true
+            max_alerts: 0
+
+      - name: 'critical-webhook'
+        webhook_configs:
+          - url: 'http://critical-webhook-receiver.monitoring.svc.cluster.local:5001/alerts'
+            send_resolved: true
+            http_config:
+              follow_redirects: true
+            max_alerts: 0
