@@ -5,21 +5,58 @@ Gemeinsames Deployment-Repository für das Iskaar-Projekt. Enthält alle Kuberne
 ## Struktur
 
 ```
-├── k8s/                            # Kubernetes Manifeste
-│   ├── namespace.yaml              # Namespace "iskaar"
-│   ├── postgres-secret.yaml        # DB-Credentials (Platzhalter)
-│   ├── postgres-pvc.yaml           # PersistentVolumeClaim (1Gi)
+├── k8s/                             # Kubernetes Manifeste
+│   ├── namespace.yaml               # Namespace "iskaar"
+│   ├── postgres-secret.yaml         # DB-Credentials (Platzhalter)
+│   ├── postgres-pvc.yaml            # PersistentVolumeClaim (1Gi)
 │   ├── postgresql-deployment.yaml
 │   ├── postgresql-service.yaml
 │   ├── backend-deployment.yaml
 │   ├── backend-service.yaml
 │   ├── frontend-deployment.yaml
 │   ├── frontend-service.yaml
-│   └── ingress.yaml                # Nginx Ingress + WebSocket
-├── docker-compose.full-stack.yml   # Full-Stack für LAN/WLAN-Spiel
-├── scripts/                        # Deploy- und Validierungsskripte
+│   ├── ingress.yaml                 # Nginx Ingress + WebSocket
+│   └── monitoring/                  # Monitoring & Alerting Stack
+│       ├── 00-namespace.yaml            # Namespace "monitoring"
+│       ├── 01-prometheus-servicemonitor.yaml  # Scraping-Config für Backend
+│       ├── 02-prometheus-rules.yaml     # Alert-Regeln (6 Alerts)
+│       ├── 03-alertmanager-config.yaml  # Routing + Webhook-Receiver
+│       ├── 04-alertmanager-deployment.yaml
+│       ├── 05-grafana-datasource-config.yaml
+│       ├── 06-grafana-dashboard-config.yaml
+│       ├── 07-grafana-dashboard-json.yaml   # "Iskaar Overview" Dashboard
+│       ├── 08-grafana-deployment.yaml
+│       ├── 09-grafana-ingress.yaml
+│       └── 10-prometheus-cr.yaml        # Prometheus Operator CR + RBAC
+├── docker-compose.full-stack.yml    # Full-Stack für LAN/WLAN-Spiel
+├── scripts/                         # Deploy- und Validierungsskripte
 └── README.md
 ```
+
+## Projekt-/Repo-Struktur (Workspace)
+
+Alle Iskaar-Repos liegen als Geschwister-Verzeichnisse im selben Workspace:
+
+```
+Workspace/
+├── iskaarBE/                    # Backend-Repository
+│   └── iskaar-be/
+│       └── iskaar/              # Maven Multi-Module Root
+│           ├── iskaar-domain/       # Reine Spiellogik (keine Frameworks)
+│           ├── iskaar-application/  # Use Cases, Orchestrierung
+│           ├── iskaar-infrastructure/ # WebSocket, Persistence, Metriken
+│           └── iskaar-bootstrap/    # Spring Boot Entry Point, REST, Config
+├── iskaarFE/                    # Frontend-Repository
+│   └── iskaar-frontend/
+│       └── src/                 # React + Phaser 3 (TypeScript, Vite)
+├── Iskaar-deploy/               # Deployment-Repository (dieses Repo)
+│   ├── k8s/                     # Kubernetes-Manifeste (App + Monitoring)
+│   ├── docker-compose.full-stack.yml
+│   └── scripts/
+└── docs/                        # Übergreifende Dokumentation, Roadmap
+```
+
+> **Wichtig:** Die `docker-compose.full-stack.yml` referenziert die Geschwister-Repos über relative Pfade (`../iskaarBE/iskaar-be`, `../iskaarFE/iskaar-frontend`). Die Verzeichnisstruktur darf nicht geändert werden, sonst schlägt der Build fehl.
 
 ---
 
@@ -170,6 +207,66 @@ Die Deployment-Manifeste verwenden Platzhalter-Images (`iskaar-backend:latest`, 
 #### Ingress Hostname
 
 In `k8s/ingress.yaml` den Host `iskaar.example.com` durch den tatsächlichen Hostnamen ersetzen.
+
+---
+
+## Monitoring & Alerting Stack
+
+Der Monitoring-Stack wird im separaten Kubernetes-Namespace `monitoring` deployed und überwacht das Iskaar-Backend.
+
+### Komponenten
+
+| Komponente | Funktion | Port |
+|---|---|---|
+| **Prometheus** | Metriken-Sammlung (Operator-basiert) | 9090 |
+| **Grafana** | Dashboard-Visualisierung | 3000 |
+| **Alertmanager** | Alert-Routing & Notifications | 9093 |
+
+### Voraussetzungen
+
+- Kubernetes Cluster mit [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator) installiert (für CRDs: Prometheus, ServiceMonitor, PrometheusRule)
+- Nginx Ingress Controller (für Grafana-Zugriff)
+
+### Monitoring-Stack deployen
+
+```bash
+# Namespace + alle Manifeste auf einmal
+kubectl apply -f k8s/monitoring/
+```
+
+### Grafana-Zugriff (lokaler Cluster)
+
+```bash
+kubectl port-forward svc/grafana 3000:3000 -n monitoring
+# → http://localhost:3000 (Login: admin / admin)
+```
+
+Das Dashboard "Iskaar Overview" wird automatisch provisioniert und enthält 10 Panels:
+- **Game Metrics:** Active Games, Connected Players, WebSocket Connections
+- **WebSocket:** Message Throughput, Deserialization Errors
+- **JVM:** Heap Memory, Non-Heap Memory, GC Pause Duration
+- **HTTP:** Response Time Percentiles, Request Rate by Status
+
+### Alert-Regeln
+
+| Alert | Severity | Trigger |
+|---|---|---|
+| IskaarHighErrorRate | critical | HTTP 5xx > 5% über 5 Min |
+| IskaarWebSocketConnectionDrop | warning | Connections > 50% Drop in 2 Min |
+| IskaarHighMemoryUsage | warning | Heap > 85% über 5 Min |
+| IskaarDeserializationFailures | critical | > 3 Fehler in 5 Min |
+| IskaarServiceDown | critical | Backend nicht erreichbar > 1 Min |
+| IskaarScrapeFailure | warning | Kein Scrape > 2 Min |
+
+### Webhook-URLs anpassen
+
+Die Alertmanager-Konfiguration (`03-alertmanager-config.yaml`) enthält Platzhalter-URLs für Webhook-Receiver. Vor dem produktiven Einsatz anpassen:
+
+```yaml
+# In 03-alertmanager-config.yaml
+url: 'http://webhook-receiver.monitoring.svc.cluster.local:5001/alerts'       # Default
+url: 'http://critical-webhook-receiver.monitoring.svc.cluster.local:5001/alerts'  # Critical
+```
 
 ---
 
