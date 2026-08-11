@@ -24,11 +24,9 @@ spec:
       containers:
         - name: iskaar-frontend
           image: iskaar-frontend:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 80
-          env:
-            - name: BACKEND_HOST
-              value: "iskaar-backend.iskaar.svc.cluster.local"
           readinessProbe:
             httpGet:
               path: /
