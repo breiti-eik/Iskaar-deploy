@@ -61,21 +61,21 @@ spec:
                   name: postgres-credentials
                   key: POSTGRES_PASSWORD
             - name: SPRING_PROFILES_ACTIVE
-              value: "local,docker"
+              value: "docker"
           readinessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 20
+            initialDelaySeconds: 60
             periodSeconds: 5
-            failureThreshold: 3
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 90
             periodSeconds: 10
-            failureThreshold: 3
+            failureThreshold: 5
           resources:
             requests:
               cpu: 200m
