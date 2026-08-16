@@ -15,7 +15,8 @@ Gemeinsames Deployment-Repository für das Iskaar-Projekt. Enthält alle Kuberne
 │   ├── backend-service.yaml
 │   ├── frontend-deployment.yaml
 │   ├── frontend-service.yaml
-│   ├── ingress.yaml                 # Nginx Ingress + WebSocket
+│   ├── ingress.yaml                 # Nginx Ingress + WebSocket + TLS
+│   ├── cluster-issuer.yaml          # cert-manager SelfSigned ClusterIssuer
 │   └── monitoring/                  # Monitoring & Alerting Stack
 │       ├── 00-namespace.yaml            # Namespace "monitoring"
 │       ├── 01-prometheus-servicemonitor.yaml  # Scraping-Config für Backend
@@ -207,6 +208,72 @@ Die Deployment-Manifeste verwenden Platzhalter-Images (`iskaar-backend:latest`, 
 #### Ingress Hostname
 
 In `k8s/ingress.yaml` den Host `iskaar.example.com` durch den tatsächlichen Hostnamen ersetzen.
+
+---
+
+## TLS/HTTPS (Minikube mit Self-Signed Cert)
+
+Für eine produktionsnahe lokale Entwicklung kann TLS/HTTPS mit cert-manager und einem selbstsignierten Zertifikat aktiviert werden.
+
+### Voraussetzungen
+
+| Tool | Mindestversion | Prüfung |
+|------|---------------|---------|
+| kubectl | v1.28+ | `kubectl version --client` |
+| Minikube | v1.32+ | `minikube version` |
+| Ingress-Addon | aktiviert | `minikube addons list \| grep ingress` |
+
+### Setup
+
+```bash
+# 1. cert-manager installieren
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
+
+# 2. Warten bis alle Pods ready (~2 Min)
+kubectl get pods -n cert-manager --watch
+
+# 3. ClusterIssuer anwenden
+kubectl apply -f k8s/cluster-issuer.yaml
+
+# 4. ClusterIssuer prüfen (READY=True)
+kubectl get clusterissuer
+
+# 5. Ingress mit TLS anwenden
+kubectl apply -f k8s/ingress.yaml
+
+# 6. Zertifikat prüfen (READY=True)
+kubectl get certificate -n iskaar
+
+# 7. Tunnel starten (separates Terminal)
+minikube tunnel
+
+# 8. HTTPS testen
+curl -k https://iskaar.games
+```
+
+### Verifikation
+
+| Prüfung | Kommando | Erwartung |
+|---------|----------|-----------|
+| cert-manager Pods | `kubectl get pods -n cert-manager` | 3× Running 1/1 |
+| ClusterIssuer | `kubectl get clusterissuer` | Ready=True |
+| Zertifikat | `kubectl get certificate -n iskaar` | Ready=True |
+| TLS Secret | `kubectl get secret iskaar-games-tls -n iskaar` | Typ `kubernetes.io/tls` |
+| HTTPS | `curl -k https://iskaar.games` | HTTP 200 |
+| SSL-Redirect | `curl -I http://iskaar.games` | 308 → https:// |
+
+### Hinweis: Selbstsigniertes Zertifikat
+
+Da ein selbstsigniertes Zertifikat verwendet wird, zeigt der Browser eine Sicherheitswarnung an. Das ist erwartetes Verhalten für die lokale Entwicklung. Zertifikat im Browser manuell akzeptieren.
+
+### Troubleshooting
+
+| Problem | Lösung |
+|---------|--------|
+| cert-manager Pods starten nicht | `kubectl describe pod -n cert-manager` — Ressourcen prüfen |
+| ClusterIssuer nicht Ready | cert-manager-Logs prüfen |
+| Zertifikat nicht ausgestellt | `kubectl describe certificate -n iskaar` |
+| HTTPS nicht erreichbar | `minikube tunnel` aktiv? hosts-Eintrag vorhanden? |
 
 ---
 
