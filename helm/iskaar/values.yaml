@@ -1,0 +1,27 @@
+namespace: iskaar
+
+image:
+  registry: localhost:5000
+  backend:
+    name: iskaar-backend
+    tag: latest  # Wird immer vom Deploy-Skript überschrieben
+  frontend:
+    name: iskaar-frontend
+    tag: latest  # Wird immer vom Deploy-Skript überschrieben
+  pullPolicy: IfNotPresent
+
+backend:
+  replicas: 1
+  resources: {}
+
+frontend:
+  replicas: 1
+  resources: {}
+
+postgresql:
+  replicas: 1
+  storage:
+    size: 1Gi
+
+ingress:
+  enabled: true
