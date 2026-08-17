@@ -1,0 +1,71 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iskaar-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: iskaar-frontend
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: iskaar
+  annotations:
+    cert-manager.io/cluster-issuer: "selfsigned-cluster-issuer"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/connection-proxy-header: "keep-alive"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - iskaar.games
+      secretName: iskaar-games-tls
+  rules:
+    - host: iskaar.games
+      http:
+        paths:
+          - path: /games
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-backend
+                port:
+                  number: 8080
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-backend
+                port:
+                  number: 8080
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-backend
+                port:
+                  number: 8080
+          - path: /swagger-ui
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-backend
+                port:
+                  number: 8080
+          - path: /v3/api-docs
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-backend
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: iskaar-frontend
+                port:
+                  number: 80
+{{- end }}

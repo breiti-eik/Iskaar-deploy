@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: iskaar-backend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: iskaar-backend
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: iskaar
+    {{- include "iskaar.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iskaar-backend
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: iskaar
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
