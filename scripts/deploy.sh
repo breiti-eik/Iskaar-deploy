@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Iskaar Deploy Script
-# Orchestrates: Build â†’ Push â†’ Rollout â†’ Smoke-Test for the Iskaar project
+# Orchestrates: Build ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Push ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Rollout ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Smoke-Test for the Iskaar project
 # Usage: ./deploy.sh <environment> [--tag <image-tag>] [--dry-run] [--skip-smoke]
 # =============================================================================
 
@@ -28,6 +28,7 @@ DRY_RUN=false
 SKIP_SMOKE=false
 IMAGE_TAG=""
 PRIMARY_TAG=""
+USE_REGISTRY=true
 
 # --- Helper Functions --------------------------------------------------------
 
@@ -69,8 +70,8 @@ EOF
 validate_prerequisites() {
     local missing=()
 
-    for cmd in git docker helm kubectl; do
-        if ! command -v "$cmd" &>/dev/null; then
+    for cmd in git docker helm kubectl minikube; do
+        if ! command -v "$cmd" &>/dev/null && ! command -v "${cmd}.exe" &>/dev/null; then
             missing+=("$cmd")
         fi
     done
@@ -85,6 +86,23 @@ validate_prerequisites() {
         fi
     fi
 }
+
+# Resolve command: prefer .exe on Windows/WSL (tools configured there), fall back to native
+resolve_cmd() {
+    local cmd="$1"
+    if command -v "${cmd}.exe" &>/dev/null; then
+        echo "${cmd}.exe"
+    elif command -v "$cmd" &>/dev/null; then
+        echo "$cmd"
+    else
+        echo "$cmd"
+    fi
+}
+
+HELM=$(resolve_cmd helm)
+KUBECTL=$(resolve_cmd kubectl)
+MINIKUBE=$(resolve_cmd minikube)
+DOCKER=$(resolve_cmd docker)
 
 # Wrapper for command execution: prints instead of running in dry-run mode.
 # Usage: run_cmd docker push myimage:latest
@@ -112,16 +130,17 @@ ensure_minikube_running() {
     fi
 
     # Check if minikube is running
-    if ! minikube status --format='{{.Host}}' 2>/dev/null | grep -q "Running"; then
+    if ! $MINIKUBE status --format='{{.Host}}' 2>/dev/null | grep -q "Running"; then
         echo "Minikube is not running. Starting Minikube..."
-        if ! minikube start; then
+        if ! $MINIKUBE start; then
             echo "Error: Failed to start Minikube." >&2
             exit 1
         fi
         echo "Minikube started successfully."
         # Wait for cluster to be ready
         echo "Waiting for cluster to be ready..."
-        if ! kubectl cluster-info --request-timeout=30s >/dev/null 2>&1; then
+        sleep 5
+        if ! $KUBECTL cluster-info --request-timeout=30s >/dev/null 2>&1; then
             echo "Error: Cluster not ready after Minikube start." >&2
             exit 1
         fi
@@ -129,15 +148,9 @@ ensure_minikube_running() {
         echo "Minikube is running."
     fi
 
-    # Check if registry addon is enabled
-    if ! minikube addons list 2>/dev/null | grep -E "registry\s" | grep -q "enabled"; then
-        echo "Registry addon not enabled. Enabling..."
-        if ! minikube addons enable registry; then
-            echo "Error: Failed to enable registry addon." >&2
-            exit 1
-        fi
-        echo "Registry addon enabled. Waiting for registry pod..."
-        sleep 5
+    # Check if registry addon is enabled (optional â€” fallback to docker-env if not)
+    if ! $MINIKUBE addons list 2>/dev/null | grep -E "registry\s" | grep -q "enabled"; then
+        echo "Registry addon not enabled (will use Minikube Docker daemon as fallback)."
     fi
 }
 
@@ -178,58 +191,90 @@ validate_semver() {
     fi
 }
 
-# Task 7.3: Registry health check
+# Task 7.3: Registry health check Ã¢â‚¬â€ or configure Minikube Docker env
 check_registry() {
     if [[ "$DRY_RUN" == true ]]; then
-        echo "[DRY-RUN] curl -sf http://localhost:5000/v2/"
+        echo "[DRY-RUN] eval \$($MINIKUBE docker-env --shell bash)"
         return 0
     fi
 
-    echo "Checking registry at localhost:5000..."
-    if ! curl -sf http://localhost:5000/v2/ >/dev/null 2>&1; then
-        echo "Error: Minikube registry not running. Run: minikube addons enable registry" >&2
-        exit 1
+    # Try localhost registry first
+    if curl -sf http://localhost:5000/v2/ >/dev/null 2>&1; then
+        echo "Registry at localhost:5000 is available."
+        USE_REGISTRY=true
+        return 0
     fi
-    echo "Registry is available."
+
+    # Try minikube-specific port
+    local mk_port
+    mk_port=$($MINIKUBE service registry -n kube-system --url 2>/dev/null | grep -oP ':\K[0-9]+' | head -1)
+    if [[ -n "$mk_port" ]] && curl -sf "http://localhost:${mk_port}/v2/" >/dev/null 2>&1; then
+        echo "Registry available at localhost:${mk_port}."
+        REGISTRY="localhost:${mk_port}"
+        USE_REGISTRY=true
+        return 0
+    fi
+
+    # Fallback: build directly in Minikube's Docker daemon (no registry needed)
+    echo "Registry not reachable. Using Minikube Docker daemon directly."
+    eval "$($MINIKUBE docker-env --shell bash 2>/dev/null)"
+    USE_REGISTRY=false
 }
 
 # Task 7.3: Build Docker images
 build_images() {
+    local be_tag fe_tag
+    if [[ "$USE_REGISTRY" == true ]]; then
+        be_tag="${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG}"
+        fe_tag="${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG}"
+    else
+        be_tag="${BACKEND_IMAGE}:${IMAGE_TAG}"
+        fe_tag="${FRONTEND_IMAGE}:${IMAGE_TAG}"
+    fi
+
     echo "Building backend image..."
     if [[ "$DRY_RUN" == true ]]; then
-        echo "[DRY-RUN] timeout ${BUILD_TIMEOUT} docker build -t ${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG} ${BACKEND_CONTEXT}"
+        echo "[DRY-RUN] timeout ${BUILD_TIMEOUT} docker build -t ${be_tag} ${BACKEND_CONTEXT}"
         if [[ -n "${PRIMARY_TAG}" ]]; then
-            echo "[DRY-RUN] docker tag ${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${BACKEND_IMAGE}:${PRIMARY_TAG}"
+            local be_primary="${BACKEND_IMAGE}:${PRIMARY_TAG}"
+            [[ "$USE_REGISTRY" == true ]] && be_primary="${REGISTRY}/${be_primary}"
+            echo "[DRY-RUN] docker tag ${be_tag} ${be_primary}"
         fi
-        echo "[DRY-RUN] timeout ${BUILD_TIMEOUT} docker build -t ${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG} ${FRONTEND_CONTEXT}"
+        echo "[DRY-RUN] timeout ${BUILD_TIMEOUT} docker build -t ${fe_tag} ${FRONTEND_CONTEXT}"
         if [[ -n "${PRIMARY_TAG}" ]]; then
-            echo "[DRY-RUN] docker tag ${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${FRONTEND_IMAGE}:${PRIMARY_TAG}"
+            local fe_primary="${FRONTEND_IMAGE}:${PRIMARY_TAG}"
+            [[ "$USE_REGISTRY" == true ]] && fe_primary="${REGISTRY}/${fe_primary}"
+            echo "[DRY-RUN] docker tag ${fe_tag} ${fe_primary}"
         fi
         return 0
     fi
 
     # Build backend
-    if ! timeout "${BUILD_TIMEOUT}" docker build -t "${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG}" "${BACKEND_CONTEXT}"; then
+    if ! timeout "${BUILD_TIMEOUT}" $DOCKER build -t "${be_tag}" "${BACKEND_CONTEXT}"; then
         echo "Error: Backend image build failed." >&2
         exit 1
     fi
 
     # Tag backend with primary tag if set
     if [[ -n "${PRIMARY_TAG}" ]]; then
-        docker tag "${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG}" "${REGISTRY}/${BACKEND_IMAGE}:${PRIMARY_TAG}"
+        local be_primary="${BACKEND_IMAGE}:${PRIMARY_TAG}"
+        [[ "$USE_REGISTRY" == true ]] && be_primary="${REGISTRY}/${be_primary}"
+        $DOCKER tag "${be_tag}" "${be_primary}"
     fi
 
     echo "Building frontend image..."
 
     # Build frontend
-    if ! timeout "${BUILD_TIMEOUT}" docker build -t "${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG}" "${FRONTEND_CONTEXT}"; then
+    if ! timeout "${BUILD_TIMEOUT}" $DOCKER build -t "${fe_tag}" "${FRONTEND_CONTEXT}"; then
         echo "Error: Frontend image build failed." >&2
         exit 1
     fi
 
     # Tag frontend with primary tag if set
     if [[ -n "${PRIMARY_TAG}" ]]; then
-        docker tag "${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG}" "${REGISTRY}/${FRONTEND_IMAGE}:${PRIMARY_TAG}"
+        local fe_primary="${FRONTEND_IMAGE}:${PRIMARY_TAG}"
+        [[ "$USE_REGISTRY" == true ]] && fe_primary="${REGISTRY}/${fe_primary}"
+        $DOCKER tag "${fe_tag}" "${fe_primary}"
     fi
 
     echo "Images built successfully."
@@ -237,6 +282,11 @@ build_images() {
 
 # Task 7.4: Push images to registry
 push_images() {
+    if [[ "$USE_REGISTRY" == false ]]; then
+        echo "Skipping push (images built directly in Minikube Docker daemon)."
+        return 0
+    fi
+
     echo "Pushing images to registry..."
 
     if [[ "$DRY_RUN" == true ]]; then
@@ -250,24 +300,24 @@ push_images() {
     fi
 
     # Push backend image
-    if ! docker push "${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG}"; then
+    if ! $DOCKER push "${REGISTRY}/${BACKEND_IMAGE}:${IMAGE_TAG}"; then
         echo "Error: Failed to push ${BACKEND_IMAGE}." >&2
         exit 1
     fi
 
     # Push frontend image
-    if ! docker push "${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG}"; then
+    if ! $DOCKER push "${REGISTRY}/${FRONTEND_IMAGE}:${IMAGE_TAG}"; then
         echo "Error: Failed to push ${FRONTEND_IMAGE}." >&2
         exit 1
     fi
 
     # Push primary tag if set
     if [[ -n "${PRIMARY_TAG}" ]]; then
-        if ! docker push "${REGISTRY}/${BACKEND_IMAGE}:${PRIMARY_TAG}"; then
+        if ! $DOCKER push "${REGISTRY}/${BACKEND_IMAGE}:${PRIMARY_TAG}"; then
             echo "Error: Failed to push ${BACKEND_IMAGE}." >&2
             exit 1
         fi
-        if ! docker push "${REGISTRY}/${FRONTEND_IMAGE}:${PRIMARY_TAG}"; then
+        if ! $DOCKER push "${REGISTRY}/${FRONTEND_IMAGE}:${PRIMARY_TAG}"; then
             echo "Error: Failed to push ${FRONTEND_IMAGE}." >&2
             exit 1
         fi
@@ -280,15 +330,26 @@ push_images() {
 deploy_to_cluster() {
     echo "Deploying to cluster (environment: ${ENVIRONMENT})..."
 
+    local registry_set=""
+    local pull_policy_set=""
+    if [[ "$USE_REGISTRY" == true ]]; then
+        registry_set="--set image.registry=${REGISTRY}"
+    else
+        registry_set="--set image.registry="
+        pull_policy_set="--set image.pullPolicy=Never"
+    fi
+
     if [[ "$DRY_RUN" == true ]]; then
-        echo "[DRY-RUN] helm upgrade --install iskaar ${HELM_CHART_PATH} -f ${HELM_CHART_PATH}/values-${ENVIRONMENT}.yaml --set image.backend.tag=${IMAGE_TAG} --set image.frontend.tag=${IMAGE_TAG} -n ${NAMESPACE}"
+        echo "[DRY-RUN] helm upgrade --install iskaar ${HELM_CHART_PATH} -f ${HELM_CHART_PATH}/values-${ENVIRONMENT}.yaml --set image.backend.tag=${IMAGE_TAG} --set image.frontend.tag=${IMAGE_TAG} ${registry_set} ${pull_policy_set} -n ${NAMESPACE}"
         return 0
     fi
 
-    if ! helm upgrade --install iskaar "${HELM_CHART_PATH}" \
+    if ! $HELM upgrade --install iskaar "${HELM_CHART_PATH}" \
         -f "${HELM_CHART_PATH}/values-${ENVIRONMENT}.yaml" \
         --set "image.backend.tag=${IMAGE_TAG}" \
         --set "image.frontend.tag=${IMAGE_TAG}" \
+        ${registry_set} \
+        ${pull_policy_set} \
         -n "${NAMESPACE}"; then
         echo "Error: Helm deployment failed." >&2
         exit 1
@@ -307,13 +368,13 @@ wait_for_rollout() {
         return 0
     fi
 
-    if ! kubectl rollout status deployment/iskaar-backend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    if ! $KUBECTL rollout status deployment/iskaar-backend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
         echo "Error: Backend rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
         rollback "Backend rollout timeout"
         exit 1
     fi
 
-    if ! kubectl rollout status deployment/iskaar-frontend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    if ! $KUBECTL rollout status deployment/iskaar-frontend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
         echo "Error: Frontend rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
         rollback "Frontend rollout timeout"
         exit 1
@@ -332,10 +393,10 @@ show_status() {
         return 0
     fi
 
-    kubectl get pods -n "${NAMESPACE}" -o wide
+    $KUBECTL get pods -n "${NAMESPACE}" -o wide
     echo ""
     echo "Pod details:"
-    kubectl get pods -n "${NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.containers[*].image}{"\n"}{end}'
+    $KUBECTL get pods -n "${NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.containers[*].image}{"\n"}{end}'
 }
 
 # Post-deployment smoke tests
@@ -375,7 +436,7 @@ rollback() {
         return 0
     fi
 
-    if ! helm rollback iskaar 0 -n "${NAMESPACE}"; then
+    if ! $HELM rollback iskaar 0 -n "${NAMESPACE}"; then
         echo "Error: Rollback failed! Manual intervention required." >&2
         exit 1
     fi
@@ -469,7 +530,7 @@ main() {
 
     if ! run_smoke_tests; then
         echo ""
-        echo "=== Deployment FAILED â€” rolled back to previous version ==="
+        echo "=== Deployment FAILED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â rolled back to previous version ==="
         exit 1
     fi
 
