@@ -282,6 +282,59 @@ test_environment_selects_values_file() {
     fi
 }
 
+# Test 10: Dry-run contains smoke-test invocation
+test_dry_run_smoke_test() {
+    echo "[Test 10] Dry-run output contains smoke-test invocation"
+    if ! has_prerequisites; then
+        skip "Dry-run smoke-test" "Required tools (git, docker, helm, kubectl) not available"
+        return
+    fi
+
+    local output exit_code
+    output=$( cd "$DEPLOY_DIR" && $SCRIPT_PATH dev --dry-run --tag v1.0.0 2>&1 ) && exit_code=0 || exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        skip "Dry-run smoke-test" "Script exited with code $exit_code"
+        return
+    fi
+
+    if echo "$output" | grep -q "smoke-test.sh"; then
+        pass "Dry-run output contains smoke-test.sh invocation"
+    else
+        fail "Dry-run output does not contain smoke-test.sh invocation" "Output: $output"
+    fi
+}
+
+# Test 11: --skip-smoke flag skips smoke tests
+test_skip_smoke_flag() {
+    echo "[Test 11] --skip-smoke flag skips smoke tests"
+    if ! has_prerequisites; then
+        skip "Skip-smoke flag" "Required tools (git, docker, helm, kubectl) not available"
+        return
+    fi
+
+    local output exit_code
+    output=$( cd "$DEPLOY_DIR" && $SCRIPT_PATH dev --dry-run --tag v1.0.0 --skip-smoke 2>&1 ) && exit_code=0 || exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        skip "Skip-smoke flag" "Script exited with code $exit_code"
+        return
+    fi
+
+    if echo "$output" | grep -q "Smoke tests skipped"; then
+        pass "--skip-smoke skips smoke tests"
+    else
+        fail "--skip-smoke does not skip smoke tests" "Output: $output"
+    fi
+
+    # Should NOT contain smoke-test.sh call
+    if echo "$output" | grep -q "smoke-test.sh"; then
+        fail "--skip-smoke still calls smoke-test.sh"
+    else
+        pass "--skip-smoke does not call smoke-test.sh"
+    fi
+}
+
 # --- Execute Tests ------------------------------------------------------------
 
 echo "============================================="
@@ -326,6 +379,11 @@ echo ""
 
 echo "--- Environment Values File Selection (Req 2.1) ---"
 test_environment_selects_values_file
+echo ""
+
+echo "--- Smoke Tests & Rollback ---"
+test_dry_run_smoke_test
+test_skip_smoke_flag
 echo ""
 
 # --- Summary ------------------------------------------------------------------

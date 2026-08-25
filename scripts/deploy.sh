@@ -3,8 +3,8 @@ set -euo pipefail
 
 # =============================================================================
 # Iskaar Deploy Script
-# Orchestrates: Build → Push → Rollout for the Iskaar project
-# Usage: ./deploy.sh <environment> [--tag <image-tag>] [--dry-run]
+# Orchestrates: Build â†’ Push â†’ Rollout â†’ Smoke-Test for the Iskaar project
+# Usage: ./deploy.sh <environment> [--tag <image-tag>] [--dry-run] [--skip-smoke]
 # =============================================================================
 
 # --- Configuration Variables -------------------------------------------------
@@ -18,12 +18,14 @@ BUILD_TIMEOUT="${BUILD_TIMEOUT:-300}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-120}"
 BACKEND_CONTEXT="${BACKEND_CONTEXT:-../iskaarBE/iskaar-be}"
 FRONTEND_CONTEXT="${FRONTEND_CONTEXT:-../iskaarFE/iskaar-frontend}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Runtime State -----------------------------------------------------------
 
 ENVIRONMENT=""
 TAG_OVERRIDE=""
 DRY_RUN=false
+SKIP_SMOKE=false
 IMAGE_TAG=""
 PRIMARY_TAG=""
 
@@ -34,6 +36,7 @@ usage() {
 Usage: $(basename "$0") <environment> [options]
 
 Deploy the Iskaar application to a Kubernetes cluster.
+Automatically starts Minikube if not running.
 
 Arguments:
   environment          Target environment: dev, stage, or prod
@@ -41,12 +44,14 @@ Arguments:
 Options:
   --tag <image-tag>    Override the image tag (default: determined from git)
   --dry-run            Print commands without executing them
+  --skip-smoke         Skip post-deployment smoke tests
   -h, --help           Show this help message
 
 Examples:
   $(basename "$0") dev
   $(basename "$0") stage --tag v1.0.0
   $(basename "$0") prod --tag v2.1.0 --dry-run
+  $(basename "$0") dev --skip-smoke
 
 Configuration (environment variables):
   REGISTRY             Container registry address (default: localhost:5000)
@@ -95,6 +100,46 @@ run_cmd() {
 }
 
 # --- Core Functions (placeholders for tasks 7.2-7.5) -------------------------
+
+# Ensure Minikube is running and registry addon is enabled
+ensure_minikube_running() {
+    echo "Checking Minikube status..."
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "[DRY-RUN] minikube status"
+        echo "[DRY-RUN] minikube addons list | grep registry"
+        return 0
+    fi
+
+    # Check if minikube is running
+    if ! minikube status --format='{{.Host}}' 2>/dev/null | grep -q "Running"; then
+        echo "Minikube is not running. Starting Minikube..."
+        if ! minikube start; then
+            echo "Error: Failed to start Minikube." >&2
+            exit 1
+        fi
+        echo "Minikube started successfully."
+        # Wait for cluster to be ready
+        echo "Waiting for cluster to be ready..."
+        if ! kubectl cluster-info --request-timeout=30s >/dev/null 2>&1; then
+            echo "Error: Cluster not ready after Minikube start." >&2
+            exit 1
+        fi
+    else
+        echo "Minikube is running."
+    fi
+
+    # Check if registry addon is enabled
+    if ! minikube addons list 2>/dev/null | grep -E "registry\s" | grep -q "enabled"; then
+        echo "Registry addon not enabled. Enabling..."
+        if ! minikube addons enable registry; then
+            echo "Error: Failed to enable registry addon." >&2
+            exit 1
+        fi
+        echo "Registry addon enabled. Waiting for registry pod..."
+        sleep 5
+    fi
+}
 
 # Task 7.2: Tag determination and semver validation
 determine_tag() {
@@ -263,12 +308,14 @@ wait_for_rollout() {
     fi
 
     if ! kubectl rollout status deployment/iskaar-backend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
-        echo "Error: Rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
+        echo "Error: Backend rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
+        rollback "Backend rollout timeout"
         exit 1
     fi
 
     if ! kubectl rollout status deployment/iskaar-frontend -n "${NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}s"; then
-        echo "Error: Rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
+        echo "Error: Frontend rollout did not complete within ${ROLLOUT_TIMEOUT}s." >&2
+        rollback "Frontend rollout timeout"
         exit 1
     fi
 
@@ -289,6 +336,54 @@ show_status() {
     echo ""
     echo "Pod details:"
     kubectl get pods -n "${NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.containers[*].image}{"\n"}{end}'
+}
+
+# Post-deployment smoke tests
+run_smoke_tests() {
+    if [[ "$SKIP_SMOKE" == true ]]; then
+        echo "Smoke tests skipped (--skip-smoke)."
+        return 0
+    fi
+
+    echo ""
+    echo "Running post-deployment smoke tests..."
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "[DRY-RUN] ${SCRIPT_DIR}/smoke-test.sh ${ENVIRONMENT}"
+        return 0
+    fi
+
+    if ! "${SCRIPT_DIR}/smoke-test.sh" "${ENVIRONMENT}"; then
+        echo ""
+        echo "Smoke tests FAILED. Initiating rollback..."
+        rollback "Smoke tests failed"
+        return 1
+    fi
+}
+
+# Automatic rollback to previous Helm release
+rollback() {
+    local reason="${1:-Unknown reason}"
+
+    echo ""
+    echo "=== ROLLBACK ==="
+    echo "Reason: $reason"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "[DRY-RUN] helm rollback iskaar 0 -n ${NAMESPACE}"
+        echo "[DRY-RUN] ${SCRIPT_DIR}/smoke-test.sh ${ENVIRONMENT} (post-rollback verification)"
+        return 0
+    fi
+
+    if ! helm rollback iskaar 0 -n "${NAMESPACE}"; then
+        echo "Error: Rollback failed! Manual intervention required." >&2
+        exit 1
+    fi
+
+    echo "Rollback to previous revision complete."
+    echo ""
+    echo "Verifying previous version..."
+    "${SCRIPT_DIR}/smoke-test.sh" "${ENVIRONMENT}" || echo "Warning: Post-rollback smoke tests also failed. Manual check recommended."
 }
 
 # --- Argument Parsing --------------------------------------------------------
@@ -339,6 +434,10 @@ parse_args() {
                 DRY_RUN=true
                 shift
                 ;;
+            --skip-smoke)
+                SKIP_SMOKE=true
+                shift
+                ;;
             *)
                 echo "Error: Unknown option '$1'" >&2
                 usage
@@ -359,6 +458,7 @@ main() {
     echo ""
 
     validate_prerequisites
+    ensure_minikube_running
     determine_tag
     check_registry
     build_images
@@ -366,6 +466,12 @@ main() {
     deploy_to_cluster
     wait_for_rollout
     show_status
+
+    if ! run_smoke_tests; then
+        echo ""
+        echo "=== Deployment FAILED â€” rolled back to previous version ==="
+        exit 1
+    fi
 
     echo ""
     echo "=== Deployment complete ==="
