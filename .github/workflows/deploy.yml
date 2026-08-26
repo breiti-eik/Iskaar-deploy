@@ -1,0 +1,96 @@
+name: Iskaar CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      image-tag:
+        description: 'Image tag to deploy (e.g. v1.0.0-abc1234)'
+        required: true
+        type: string
+
+  repository_dispatch:
+    types: [deploy]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || github.event.client_payload.environment }}
+
+    steps:
+      - name: Checkout Deploy Repo
+        uses: actions/checkout@v4
+
+      - name: Set Variables
+        id: vars
+        run: |
+          # Merge inputs from workflow_dispatch or repository_dispatch
+          ENV="${{ github.event.inputs.environment || github.event.client_payload.environment }}"
+          TAG="${{ github.event.inputs.image-tag || github.event.client_payload.image-tag }}"
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+          echo "image-tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Deploying tag '${TAG}' to environment '${ENV}'"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure Kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Deploy via Helm
+        run: |
+          helm upgrade --install iskaar helm/iskaar \
+            -f helm/iskaar/values-${{ steps.vars.outputs.environment }}.yaml \
+            --set image.backend.tag=${{ steps.vars.outputs.image-tag }} \
+            --set image.frontend.tag=${{ steps.vars.outputs.image-tag }} \
+            --set image.registry=${{ secrets.REGISTRY_URL }} \
+            -n iskaar \
+            --create-namespace \
+            --wait \
+            --timeout 120s
+
+      - name: Wait for Rollout
+        run: |
+          kubectl rollout status deployment/iskaar-backend -n iskaar --timeout=120s
+          kubectl rollout status deployment/iskaar-frontend -n iskaar --timeout=120s
+
+      - name: Run Smoke Tests
+        run: |
+          chmod +x scripts/smoke-test.sh
+          ./scripts/smoke-test.sh ${{ steps.vars.outputs.environment }}
+
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          echo "::error::Deployment failed — initiating rollback"
+          echo "Reason: A previous step failed (rollout timeout or smoke test failure)"
+          helm rollback iskaar 0 -n iskaar --wait --timeout 60s || true
+          echo "Rollback complete. Verifying previous version..."
+          chmod +x scripts/smoke-test.sh
+          ./scripts/smoke-test.sh ${{ steps.vars.outputs.environment }} || echo "::warning::Post-rollback smoke tests also failed"
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ steps.vars.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | ${{ steps.vars.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit SHA | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
