@@ -1,3 +1,4 @@
+{{- if .Values.components.database }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,17 +31,17 @@ spec:
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ include "iskaar.postgresqlSecretName" . }}
                   key: POSTGRES_DB
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ include "iskaar.postgresqlSecretName" . }}
                   key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ include "iskaar.postgresqlSecretName" . }}
                   key: POSTGRES_PASSWORD
           livenessProbe:
             exec:
@@ -74,3 +75,4 @@ spec:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-data
+{{- end }}

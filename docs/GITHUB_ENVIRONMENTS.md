@@ -10,11 +10,18 @@ Das Iskaar-Projekt nutzt eine CI/CD-Pipeline über drei Git-Repos:
 | `Iskaar-fe` | Frontend CI (Build + Test + SonarQube) | `.github/workflows/ci.yml` |
 | `Iskaar-deploy` | CD (Deploy auf K8s) | `.github/workflows/deploy.yml` |
 
-## Aktueller Modus: Lokale Registry
+## Aktueller Modus: Zweigeteilter Readiness-/Minikube-Betrieb
 
-Die Pipeline nutzt aktuell eine **lokale Minikube-Registry** (`localhost:5000`). Docker-Build und -Push erfolgen lokal über `deploy.sh` — nicht über GitHub Actions.
+Der CD-Workflow `deploy.yml` ist in zwei streng getrennte Modi aufgeteilt und orchestriert **ausschließlich** `scripts/deploy.sh` — er konfiguriert keine Remote-Kubeconfig und ruft weder `helm upgrade`/`kubectl rollout` noch `helm rollback` direkt auf.
 
-Die Docker-Steps in den CI-Workflows sind **vorbereitet aber deaktiviert** (via Repository-Variable `REGISTRY_ENABLED`).
+| Modus | Runner | Verhalten |
+|-------|--------|-----------|
+| **Readiness (`deploy=false`, Standard)** | `ubuntu-latest` (GitHub-hosted) | Kein `KUBECONFIG`, keine Produktions-Credentials, keine Cluster-Mutation. Ruft nur `scripts/deploy.sh <env> --deploy false --monitoring <bool>`. |
+| **Deploy (`deploy=true`)** | `[self-hosted, minikube]` | Nur auf dem lokalen Self-hosted-Minikube-Runner; verifiziert vorher den lokalen Kontext und ruft nur `scripts/deploy.sh dev --deploy true --monitoring <bool>`. |
+
+Ein fehlender oder ungültiger `deploy`-/`monitoring`-Wert (auch aus `repository_dispatch`) wird sicher auf `false` normalisiert. `deploy=true` ist nur mit `environment=dev` zulässig; jedes andere Environment fällt auf Readiness zurück. Damit ist ein **Remote-Produktionsdeployment kein aktueller Standard** — der Standard ist Readiness ohne Clusterzugriff, und ein echtes Deployment ist auf das lokale Minikube-`dev`-Ziel begrenzt.
+
+Docker-Build und -Push erfolgen lokal über `deploy.sh` (lokale Registry `localhost:5000` oder Minikube-Docker-Daemon). Die Docker-Steps in den CI-Workflows der Code-Repos sind **vorbereitet aber deaktiviert** (via Repository-Variable `REGISTRY_ENABLED`).
 
 ## Lokaler Deploy-Workflow
 
@@ -22,32 +29,31 @@ Die Docker-Steps in den CI-Workflows sind **vorbereitet aber deaktiviert** (via 
 # 1. Ins Deploy-Repo navigieren
 cd Iskaar-deploy
 
-# 2. Deploy ausführen (startet Minikube automatisch falls nötig)
+# 2. Readiness (sicherer Standard, keine Cluster-Mutation)
 ./scripts/deploy.sh dev
 
-# 3. Optional: Dry-Run (zeigt was passieren würde)
-./scripts/deploy.sh dev --dry-run
+# 3. Lokaler Minikube-Deploy (nur dev; Local_Secret vorher bereitstellen)
+./scripts/deploy.sh dev --deploy true
 
-# 4. Optional: Smoke-Tests überspringen
-./scripts/deploy.sh dev --skip-smoke
+# 4. Optional: Monitoring-Stack mit ausrollen
+./scripts/deploy.sh dev --deploy true --monitoring true
 
-# 5. Optional: Bestimmten Tag deployen
-./scripts/deploy.sh dev --tag v1.0.0
+# 5. Optional: Smoke-Tests überspringen
+./scripts/deploy.sh dev --deploy true --skip-smoke
+
+# 6. Optional: Bestimmten Tag verwenden
+./scripts/deploy.sh dev --deploy true --tag v1.0.0
 ```
 
-Das Skript führt automatisch aus:
-1. Minikube starten (falls nicht läuft)
-2. Image-Tag bestimmen (Git-Tag + SHA)
-3. Docker-Images bauen (Backend + Frontend)
-4. Images in lokale Registry pushen
-5. Helm-Deployment ausführen
-6. Auf Rollout warten
-7. Smoke-Tests ausführen
-8. Bei Fehler: automatischer Rollback
+Details zu beiden Modi, Voraussetzungen, Ausgabe, Local_Secret und Sicherheitsgrenzen: [`DEPLOYMENT-READINESS.md`](DEPLOYMENT-READINESS.md).
 
-## GitHub Environments (für Remote-Betrieb)
+> **Hinweis:** Der frühere unbedingte Ablauf „Minikube starten → Images in Registry pushen → Helm-Deployment → automatischer Rollback bei jedem Aufruf" ist überholt. Im Readiness-Modus (Standard) findet **keine** dieser Mutationen statt; im Minikube-Modus übernimmt `deploy.sh` Setup, phasenweises Helm-Rollout, Smoke-Tests und Rollback (siehe Abschnitt „Rollback").
 
-Wenn eine Remote-Registry eingerichtet wird, werden folgende GitHub Environments benötigt:
+## GitHub Environments (optionaler Zukunftsschritt: Remote-Betrieb)
+
+> **Optional / nicht aktueller Standard:** Die folgenden GitHub Environments und Remote-Credentials sind **kein** Bestandteil des aktuellen zweigeteilten Betriebs. Sie beschreiben einen klar gekennzeichneten Zukunftsschritt, falls eine Remote-Registry und ein Remote-Cluster eingerichtet werden. Der aktuelle Workflow benötigt für Readiness keinerlei `KUBECONFIG`- oder Registry-Secrets und für `deploy=true` nur den lokalen Minikube-Kontext des Self-hosted-Runners.
+
+Wenn künftig eine Remote-Registry eingerichtet wird, werden folgende GitHub Environments benötigt:
 
 ### Environment: `dev`
 
@@ -73,26 +79,28 @@ Wenn eine Remote-Registry eingerichtet wird, werden folgende GitHub Environments
 | Deployment Branch | Nur manuell (workflow_dispatch) |
 | Auto-Deploy | Nein |
 
-## Secrets-Konfiguration
+## Secrets-Konfiguration (optional, nur für Remote-Betrieb)
+
+> **Optional / nicht aktueller Standard:** Weder ein base64-`KUBECONFIG`-Secret noch Remote-Registry-Credentials werden vom aktuellen Workflow benötigt. Readiness läuft ohne jedes Cluster-Secret; `deploy=true` nutzt ausschließlich den lokalen Minikube-Kontext des Self-hosted-Runners. Die folgende Tabelle gilt nur, falls der optionale Remote-Betrieb aufgesetzt wird. Alle Beispielwerte sind Platzhalter.
 
 ### Deploy-Repo (`Iskaar-deploy`) — pro Environment
 
-| Secret | Beschreibung | Beispiel |
+| Secret | Beschreibung | Beispiel (Platzhalter) |
 |--------|--------------|----------|
 | `KUBECONFIG` | Base64-encoded kubeconfig für den Ziel-Cluster | `cat ~/.kube/config \| base64` |
-| `REGISTRY_URL` | Container-Registry URL | `ghcr.io/breiti-eik` |
-| `REGISTRY_USERNAME` | Registry-Login Username | `breiti-eik` |
-| `REGISTRY_PASSWORD` | Registry-Login Passwort/Token | GitHub PAT mit `write:packages` |
+| `REGISTRY_URL` | Container-Registry URL | `<registry-host>/<org>` |
+| `REGISTRY_USERNAME` | Registry-Login Username | `<registry-user>` |
+| `REGISTRY_PASSWORD` | Registry-Login Passwort/Token | `<PAT mit write:packages>` |
 
 ### Code-Repos (`iskaar-be`, `Iskaar-fe`) — Repository-Level
 
 | Secret/Variable | Beschreibung | Beispiel |
 |-----------------|--------------|----------|
 | Variable: `REGISTRY_ENABLED` | Feature-Toggle für Docker-Build | `true` oder nicht gesetzt |
-| Secret: `REGISTRY_URL` | Container-Registry URL | `ghcr.io/breiti-eik` |
-| Secret: `REGISTRY_USERNAME` | Registry-Login Username | `breiti-eik` |
-| Secret: `REGISTRY_PASSWORD` | Registry-Login Passwort/Token | GitHub PAT |
-| Secret: `DEPLOY_REPO_TOKEN` | PAT mit `repo` Scope für repository_dispatch | GitHub PAT |
+| Secret: `REGISTRY_URL` | Container-Registry URL | `<registry-host>/<org>` |
+| Secret: `REGISTRY_USERNAME` | Registry-Login Username | `<registry-user>` |
+| Secret: `REGISTRY_PASSWORD` | Registry-Login Passwort/Token | `<PAT mit write:packages>` |
+| Secret: `DEPLOY_REPO_TOKEN` | PAT mit `repo` Scope für repository_dispatch | `<PAT mit repo scope>` |
 
 ## Aktivierung der Remote-Registry
 
@@ -120,7 +128,7 @@ In **beiden Code-Repos** (iskaar-be, Iskaar-fe):
 `helm/iskaar/values-prod.yaml` — Registry-URL aktualisieren:
 ```yaml
 image:
-  registry: ghcr.io/breiti-eik  # statt registry.example.com
+  registry: <registry-host>/<org>  # z. B. ghcr.io/<org>, statt registry.example.com
 ```
 
 ### Schritt 5: imagePullSecret ergänzen (für private Registry)
@@ -129,9 +137,9 @@ Falls die Registry privat ist, muss ein `imagePullSecret` im Cluster existieren:
 
 ```bash
 kubectl create secret docker-registry ghcr-pull-secret \
-  --docker-server=ghcr.io \
-  --docker-username=breiti-eik \
-  --docker-password=<PAT> \
+  --docker-server=<registry-host> \
+  --docker-username=<registry-user> \
+  --docker-password=<PAT mit read:packages> \
   -n iskaar
 ```
 
@@ -148,7 +156,9 @@ spec:
 2. Tag-Push `v1.0.0` → CI baut + pusht → CD deployt auf `stage`
 3. Manuell: workflow_dispatch → CD deployt auf `prod` (nach Approval)
 
-## Promotion-Pfad
+## Promotion-Pfad (optionaler Remote-Betrieb)
+
+> **Optional / nicht aktueller Standard:** Der folgende Remote-Promotion-Pfad (auto-deploy auf `dev`/`stage`/`prod`) gehört zum optionalen Zukunftsschritt und ist im aktuellen zweigeteilten Betrieb **nicht** aktiv. Aktuell führt `deploy=true` ausschließlich ein lokales Minikube-`dev`-Deployment aus; `stage`/`prod` sind nur Readiness-Validierungen.
 
 ```
 develop-Push → CI → Docker Build/Push → auto-deploy auf dev
@@ -160,14 +170,13 @@ workflow_dispatch (manuell)            → deploy auf prod (Approval nötig)
 
 ## Rollback
 
-Bei fehlgeschlagenem Deployment (Rollout-Timeout oder Smoke-Test-Failure) wird automatisch zurückgerollt:
+Rollback ist Aufgabe von `scripts/deploy.sh` — **nicht** des Workflows. Der CD-Workflow ruft keinen direkten `helm rollback` mehr auf; er delegiert die gesamte Cluster-Mutation und deren Fehlerbehandlung an das Skript.
 
-- **Lokal:** `deploy.sh` führt `helm rollback` aus
-- **Remote (CD-Workflow):** Der `Rollback on Failure` Step führt `helm rollback` aus
+`deploy.sh` besitzt eine Revisionserkennung und rollt im Minikube-Modus (`deploy=true`) nur die Release `iskaar` im geprüften Namespace auf die vorherige Revision zurück, wenn ein Rollout-, Zertifikats-, Zugangs- oder Smoke-Schritt fehlschlägt. Der Rollback wird mit `helm rollback --wait` verifiziert; PostgreSQL-PVC und Local_Secret bleiben erhalten (keine destruktive Bereinigung). Existiert keine Vorrevision (Erstinstallation), wird der Teilzustand gemeldet und kein Rollback vorgetäuscht. Details und die genaue Ausgabe: [`DEPLOYMENT-READINESS.md`](DEPLOYMENT-READINESS.md) (Abschnitt „Fehler- und Rollback-Ausgaben").
 
-Manueller Rollback:
+Manueller Rollback (nur lokal, gegen den geprüften Minikube-Kontext):
 ```bash
-# Letzte erfolgreiche Revision anzeigen
+# Letzte Revisionen anzeigen
 helm history iskaar -n iskaar
 
 # Auf bestimmte Revision zurückrollen

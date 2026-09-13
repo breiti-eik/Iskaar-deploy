@@ -1,13 +1,24 @@
+deploy: false
+
+monitoring:
+  enabled: false
+
+components:
+  database: true
+  backend: true
+  frontend: true
+  tls: true
+
 namespace: iskaar
 
 image:
   registry: localhost:5000
   backend:
     name: iskaar-backend
-    tag: latest  # Wird immer vom Deploy-Skript überschrieben
+    tag: latest  # Always overridden by the deployment script
   frontend:
     name: iskaar-frontend
-    tag: latest  # Wird immer vom Deploy-Skript überschrieben
+    tag: latest  # Always overridden by the deployment script
   pullPolicy: IfNotPresent
 
 backend:
@@ -19,6 +30,8 @@ frontend:
   resources: {}
 
 postgresql:
+  existingSecret: ""
+  createPlaceholderSecret: true
   replicas: 1
   storage:
     size: 1Gi

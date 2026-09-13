@@ -1,3 +1,4 @@
+{{- if .Values.components.backend }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,7 +45,7 @@ spec:
               echo "PostgreSQL is available!"
       containers:
         - name: iskaar-backend
-          image: "{{ .Values.image.registry }}/{{ .Values.image.backend.name }}:{{ .Values.image.backend.tag }}"
+          image: "{{ include "iskaar.imageReference" (dict "registry" .Values.image.registry "name" .Values.image.backend.name "tag" .Values.image.backend.tag) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 8080
@@ -54,12 +55,12 @@ spec:
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ include "iskaar.postgresqlSecretName" . }}
                   key: POSTGRES_USER
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ include "iskaar.postgresqlSecretName" . }}
                   key: POSTGRES_PASSWORD
             - name: SPRING_PROFILES_ACTIVE
               value: "docker"
@@ -81,3 +82,4 @@ spec:
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
           {{- end }}
+{{- end }}

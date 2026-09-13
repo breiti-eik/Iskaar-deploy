@@ -1,0 +1,10 @@
+# actionlint configuration for the Iskaar deploy repository.
+#
+# The deploy=true path of .github/workflows/deploy.yml intentionally targets a
+# self-hosted runner that is labelled `minikube` in addition to `self-hosted`.
+# This label identifies the local Minikube runner and is what prevents a real
+# deployment from ever running on a GitHub-hosted runner. Declaring it here
+# tells actionlint that the label is a known self-hosted runner label.
+self-hosted-runner:
+  labels:
+    - minikube
