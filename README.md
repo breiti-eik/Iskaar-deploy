@@ -61,6 +61,30 @@ Workspace/
 
 ---
 
+## Deployment: Readiness- und Minikube-Modus
+
+Das Deployment wird über `scripts/deploy.sh` (bzw. den PowerShell-/WSL-Wrapper `scripts/deploy.ps1`) orchestriert. Es gibt genau zwei Modi, gesteuert über `--deploy`:
+
+- **Readiness-Modus (`deploy=false`, sicherer Standard):** Baut, testet und validiert alles für ein Deployment Nötige (Backend-/Frontend-Builds und -Tests, lokale Image-Builds, `helm lint`/`helm template`, Client-Dry-Run der Manifeste), **ohne** eine einzige Cluster-Ressource anzuwenden und **ohne** `docker push`.
+- **Minikube-Modus (`deploy=true`, nur `dev`):** Bereitet ausschließlich das **lokale** Minikube-Ziel vor und rollt den Stack in fester Reihenfolge aus. Es werden keine Remote-Kubeconfig, kein fremder Kontext und keine Remote-Registry akzeptiert.
+
+```bash
+# Sicherer Standard: Readiness ohne Cluster-Mutation (deploy=false ist Default)
+./scripts/deploy.sh dev
+# Readiness auch für stage/prod (reine Validierung, keine Mutation)
+./scripts/deploy.sh stage
+./scripts/deploy.sh prod
+
+# Lokaler Minikube-Deploy (nur dev; Local_Secret vorher bereitstellen)
+./scripts/deploy.sh dev --deploy true
+# Optional mit Monitoring-Stack
+./scripts/deploy.sh dev --deploy true --monitoring true
+```
+
+Details zu Voraussetzungen, kopierbaren Bash-/WSL-/PowerShell-Aufrufen, der Konsolenausgabe (Modus, Ziel, Phasenstatus, effektive URLs, Rollback), lokalen Secrets und den Sicherheitsgrenzen stehen in [`docs/DEPLOYMENT-READINESS.md`](docs/DEPLOYMENT-READINESS.md). Die folgenden Abschnitte (Docker Compose, Kubernetes-Manifeste, TLS, Monitoring) beschreiben die zugrunde liegenden Ressourcen; für den orchestrierten Ablauf gilt der Modusvertrag oben.
+
+---
+
 ## Docker Compose — LAN/WLAN-Spiel
 
 Mit Docker Compose lässt sich das komplette Iskaar-Kartenspiel (Frontend + Backend + Datenbank) lokal starten und für alle Geräte im selben Netzwerk spielbar machen.
@@ -157,14 +181,16 @@ docker compose -f docker-compose.full-stack.yml logs backend
 
 ## Kubernetes Deployment
 
+> **Hinweis:** Der empfohlene Weg ist der orchestrierte Minikube-Modus `./scripts/deploy.sh dev --deploy true` (siehe [`docs/DEPLOYMENT-READINESS.md`](docs/DEPLOYMENT-READINESS.md)). Er übernimmt Reihenfolge, Gates, lokales Secret, TLS und Smoke-Tests automatisch und ist auf das lokale Minikube-`dev`-Ziel begrenzt. Die folgenden manuellen `kubectl apply`-Schritte beschreiben die zugrunde liegenden Ressourcen und sind als Referenz bzw. für gezielte Einzelanwendung gedacht — sie sind **kein** Remote-/Produktionsdeployment.
+
 ### Voraussetzungen
 
-- Kubernetes Cluster (z.B. minikube, kind, oder Cloud-Provider)
-- `kubectl` konfiguriert
+- Kubernetes Cluster (lokal, z.B. minikube oder kind)
+- `kubectl` auf den lokalen Kontext konfiguriert
 - Nginx Ingress Controller installiert
-- Container-Images gebaut und in einer Registry verfügbar
+- Container-Images lokal gebaut und im Ziel verfügbar (lokale Registry oder Minikube-Docker-Daemon)
 
-### Alle Manifeste anwenden
+### Alle Manifeste anwenden (manuell)
 
 ```bash
 kubectl apply -f k8s/namespace.yaml
@@ -191,19 +217,21 @@ kubectl -n iskaar get ingress
 
 #### Secrets
 
-Die Datei `postgres-secret.yaml` enthält base64-codierte Platzhalter. Für echte Environments:
+Die Datei `postgres-secret.yaml` enthält bewusst **nicht produktive** base64-Platzhalter (Placeholder_Secret). Diese Platzhalter sind **kein** lokaler Standard für echte Credentials und werden vom Deploy-Skript ausdrücklich als produktive Quelle abgelehnt.
+
+Der sichere lokale Weg ist das **Local_Secret** `postgres-credentials`, das der Minikube-Modus aus Umgebungsvariablen oder einer git-ignorierten Datei unter `secrets/` bezieht — ohne versionierte Klartext-Credentials. Bereitstellung und Regeln sind in [`docs/DEPLOYMENT-READINESS.md`](docs/DEPLOYMENT-READINESS.md) (Abschnitt „Placeholder_Secret vs. Local_Secret") beschrieben. Zum gezielten manuellen Anlegen (Platzhalter unbedingt durch lokale Werte ersetzen):
 
 ```bash
 kubectl -n iskaar create secret generic postgres-credentials \
-  --from-literal=POSTGRES_DB=iskaar \
-  --from-literal=POSTGRES_USER=<user> \
-  --from-literal=POSTGRES_PASSWORD=<password> \
+  --from-literal=POSTGRES_DB=<YOUR_LOCAL_DB_NAME> \
+  --from-literal=POSTGRES_USER=<YOUR_LOCAL_DB_USER> \
+  --from-literal=POSTGRES_PASSWORD=<YOUR_LOCAL_DB_PASSWORD> \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 #### Images
 
-Die Deployment-Manifeste verwenden Platzhalter-Images (`iskaar-backend:latest`, `iskaar-frontend:latest`). Pro Environment anpassen oder via Kustomize/Helm parametrisieren.
+Die Deployment-Manifeste verwenden Platzhalter-Images (`iskaar-backend:latest`, `iskaar-frontend:latest`). Im Minikube-Modus baut `deploy.sh` die Images lokal (Minikube-Docker-Daemon oder geprüfte lokale Registry) und reicht Tag/Registry/`imagePullPolicy` an Helm durch — kein Remote-Push. Details in [`docs/DEPLOYMENT-READINESS.md`](docs/DEPLOYMENT-READINESS.md).
 
 #### Ingress Hostname
 
@@ -214,6 +242,8 @@ In `k8s/ingress.yaml` den Host `iskaar.example.com` durch den tatsächlichen Hos
 ## TLS/HTTPS (Minikube mit Self-Signed Cert)
 
 Für eine produktionsnahe lokale Entwicklung kann TLS/HTTPS mit cert-manager und einem selbstsignierten Zertifikat aktiviert werden.
+
+> **Hinweis:** Im Minikube-Modus (`./scripts/deploy.sh dev --deploy true`) werden cert-manager, ClusterIssuer, TLS-Ingress und der Zugriff (`minikube tunnel`/Port-Forward) automatisch in fester Reihenfolge eingerichtet und verifiziert — siehe [`docs/DEPLOYMENT-READINESS.md`](docs/DEPLOYMENT-READINESS.md). Die folgende manuelle Sequenz ist die Referenz für die einzelnen Ressourcen; die Windows-/Tunnel-Details stehen in [`k8s/MINIKUBE-TUNNEL.md`](k8s/MINIKUBE-TUNNEL.md).
 
 ### Voraussetzungen
 

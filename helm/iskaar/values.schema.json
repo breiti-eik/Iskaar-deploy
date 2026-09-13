@@ -1,0 +1,189 @@
+{
+  "title": "Iskaar Helm values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deploy",
+    "monitoring",
+    "components",
+    "namespace",
+    "image",
+    "backend",
+    "frontend",
+    "postgresql",
+    "ingress"
+  ],
+  "properties": {
+    "deploy": {
+      "type": "boolean",
+      "description": "Audit value describing the requested deployment mode."
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the optional monitoring stack is enabled."
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["database", "backend", "frontend", "tls"],
+      "properties": {
+        "database": {
+          "type": "boolean",
+          "description": "Render the database component."
+        },
+        "backend": {
+          "type": "boolean",
+          "description": "Render the backend component."
+        },
+        "frontend": {
+          "type": "boolean",
+          "description": "Render the frontend component."
+        },
+        "tls": {
+          "type": "boolean",
+          "description": "Render TLS and ingress resources."
+        }
+      }
+    },
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "description": "Kubernetes namespace used by the chart."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "backend", "frontend", "pullPolicy"],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "description": "Image registry or local image prefix."
+        },
+        "backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "tag"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+              "description": "Docker tag for the backend image."
+            }
+          }
+        },
+        "frontend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "tag"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+              "description": "Docker tag for the frontend image."
+            }
+          }
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "description": "Kubernetes image pull policy."
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas", "resources"],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object",
+          "description": "Optional Kubernetes resource requests and limits.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas", "resources"],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object",
+          "description": "Optional Kubernetes resource requests and limits.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existingSecret", "createPlaceholderSecret", "replicas", "storage"],
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Optional Kubernetes Secret name for existing database credentials."
+        },
+        "createPlaceholderSecret": {
+          "type": "boolean",
+          "description": "Whether the chart may render its non-production placeholder Secret."
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size"],
+          "properties": {
+            "size": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

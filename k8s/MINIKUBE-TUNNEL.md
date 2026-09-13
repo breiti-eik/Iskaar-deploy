@@ -2,7 +2,9 @@
 
 Anleitung für den lokalen Zugriff auf den Kubernetes-Cluster über `http://iskaar.games:8080`.
 
-> **Hinweis:** Bei Minikube mit Docker-Driver auf Windows ist Port 80 typischerweise durch HTTP.sys / Docker Desktop belegt. Deshalb verwenden wir `kubectl port-forward` auf Port 8080 als Standard-Zugang.
+> **Automatischer Zugang:** Der orchestrierte Minikube-Modus `./scripts/deploy.sh dev --deploy true` stellt den lokalen Zugriff über den `ACCESS_MODE` (`auto` | `tunnel` | `port-forward`, Default `auto`) selbst her: `auto` versucht zuerst `minikube tunnel` und fällt auf den unten dokumentierten Port-Forward zurück, die effektiven URLs werden ausgegeben und für die Smoke-Tests verwendet. Den Modusvertrag und die Ausgabe beschreibt [`../docs/DEPLOYMENT-READINESS.md`](../docs/DEPLOYMENT-READINESS.md). **Dieses Dokument ist die manuelle bzw. Hintergrund-Referenz** für den Fall, dass der Zugang von Hand gestartet, geprüft oder Fehler behoben werden müssen.
+
+> **Hinweis:** Bei Minikube mit Docker-Driver auf Windows ist Port 80 typischerweise durch HTTP.sys / Docker Desktop belegt. Deshalb verwenden wir `kubectl port-forward` auf Port 8080 als Standard-Zugang. Der Voraussetzungsblock unten (manuelles `minikube start`, Addon-Aktivierung, `kubectl apply`) gilt nur für den **manuellen** Weg — im Minikube-Modus übernimmt `deploy.sh` diese Schritte.
 
 ## Voraussetzungen
 
