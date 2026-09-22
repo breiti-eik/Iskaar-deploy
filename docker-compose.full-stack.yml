@@ -15,7 +15,7 @@ services:
 
   backend:
     build:
-      context: ../iskaarBE/iskaar-be
+      context: ../iskaarBE
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/iskaar
       SPRING_DATASOURCE_USERNAME: iskaar
