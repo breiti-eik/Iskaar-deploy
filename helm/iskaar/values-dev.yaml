@@ -1,0 +1,9 @@
+image:
+  registry: localhost:5000
+  pullPolicy: IfNotPresent
+
+backend:
+  replicas: 1
+
+frontend:
+  replicas: 1

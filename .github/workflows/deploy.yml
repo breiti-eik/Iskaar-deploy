@@ -1,0 +1,303 @@
+name: Iskaar CD
+
+# =============================================================================
+# Iskaar Continuous Deployment
+#
+# This workflow is split into two mutually exclusive modes that map directly to
+# the `scripts/deploy.sh` orchestrator contract:
+#
+#   * Readiness (deploy=false, the safe default): runs on a GitHub-hosted
+#     runner, never reads a KUBECONFIG or production credential, and only
+#     invokes `scripts/deploy.sh <env> --deploy false --monitoring <bool>`.
+#   * Deploy (deploy=true): runs ONLY on a self-hosted runner labelled
+#     `self-hosted` + `minikube`, verifies the local Minikube context, and only
+#     invokes `scripts/deploy.sh dev --deploy true --monitoring <bool>`.
+#
+# The workflow no longer configures a remote kubeconfig and no longer calls
+# `helm upgrade`, `kubectl rollout`, or `helm rollback` directly. All cluster
+# mutation is delegated to `scripts/deploy.sh`, which owns the safety, secret,
+# and rollback contracts.
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (deploy=true is restricted to dev)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      image-tag:
+        description: 'Image tag to deploy (e.g. v1.0.0-abc1234)'
+        required: true
+        type: string
+      deploy:
+        description: 'Run a real local Minikube deployment (true) or readiness only (false)'
+        required: false
+        default: false
+        type: boolean
+      monitoring:
+        description: 'Include the optional monitoring stack'
+        required: false
+        default: false
+        type: boolean
+
+  repository_dispatch:
+    types: [deploy]
+
+# The default mode is always readiness. A missing or invalid repository_dispatch
+# payload is normalized to deploy=false / monitoring=false further below.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Normalize inputs from both trigger sources into strict true/false booleans.
+  # Any missing or invalid value is coerced to a safe `false`. This job never
+  # touches a cluster and never reads a secret value.
+  # ---------------------------------------------------------------------------
+  normalize:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.norm.outputs.environment }}
+      image-tag: ${{ steps.norm.outputs.image-tag }}
+      deploy: ${{ steps.norm.outputs.deploy }}
+      monitoring: ${{ steps.norm.outputs.monitoring }}
+    steps:
+      - name: Normalize dispatch inputs
+        id: norm
+        env:
+          # workflow_dispatch values (empty for repository_dispatch)
+          WD_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          WD_IMAGE_TAG: ${{ github.event.inputs.image-tag }}
+          WD_DEPLOY: ${{ github.event.inputs.deploy }}
+          WD_MONITORING: ${{ github.event.inputs.monitoring }}
+          # repository_dispatch client_payload values (empty for workflow_dispatch)
+          RD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
+          RD_IMAGE_TAG: ${{ github.event.client_payload.image-tag }}
+          RD_DEPLOY: ${{ github.event.client_payload.deploy }}
+          RD_MONITORING: ${{ github.event.client_payload.monitoring }}
+        run: |
+          set -euo pipefail
+
+          # Normalize a raw value to exactly "true" or "false". Anything that is
+          # not the literal string "true" (case-insensitive) becomes "false".
+          normalize_boolean() {
+            local raw="${1:-}"
+            local lowered
+            lowered="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            if [ "$lowered" = "true" ]; then
+              echo "true"
+            else
+              echo "false"
+            fi
+          }
+
+          ENVIRONMENT="${WD_ENVIRONMENT:-$RD_ENVIRONMENT}"
+          IMAGE_TAG="${WD_IMAGE_TAG:-$RD_IMAGE_TAG}"
+          DEPLOY_RAW="${WD_DEPLOY:-$RD_DEPLOY}"
+          MONITORING_RAW="${WD_MONITORING:-$RD_MONITORING}"
+
+          DEPLOY="$(normalize_boolean "$DEPLOY_RAW")"
+          MONITORING="$(normalize_boolean "$MONITORING_RAW")"
+
+          # deploy=true is only valid for the local dev Minikube target. Any
+          # other environment falls back to the safe readiness default.
+          if [ "$DEPLOY" = "true" ] && [ "$ENVIRONMENT" != "dev" ]; then
+            echo "::warning::deploy=true is only allowed with environment=dev; falling back to readiness (deploy=false)."
+            DEPLOY="false"
+          fi
+
+          if [ -z "$ENVIRONMENT" ]; then
+            echo "::error::No environment provided by workflow_dispatch or repository_dispatch."
+            exit 1
+          fi
+
+          {
+            echo "environment=${ENVIRONMENT}"
+            echo "image-tag=${IMAGE_TAG}"
+            echo "deploy=${DEPLOY}"
+            echo "monitoring=${MONITORING}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Normalized mode: deploy=${DEPLOY}, monitoring=${MONITORING}, environment=${ENVIRONMENT}"
+
+  # ---------------------------------------------------------------------------
+  # Readiness mode (deploy=false). Runs on a GitHub-hosted runner. No KUBECONFIG,
+  # no remote registry credentials, no cluster mutation. The backend and frontend
+  # sibling repositories are checked out into the paths the script expects
+  # (../iskaarBE/iskaar-be and ../iskaarFE/iskaar-frontend, relative to the
+  # deploy repository checkout).
+  # ---------------------------------------------------------------------------
+  readiness:
+    needs: normalize
+    if: needs.normalize.outputs.deploy != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deploy repository
+        uses: actions/checkout@v4
+        with:
+          path: Iskaar-deploy
+
+      - name: Checkout backend context
+        uses: actions/checkout@v4
+        with:
+          repository: breiti-eik/iskaar-be
+          path: iskaarBE/iskaar-be
+
+      - name: Checkout frontend context
+        uses: actions/checkout@v4
+        with:
+          repository: breiti-eik/Iskaar-fe
+          path: iskaarFE/iskaar-frontend
+
+      - name: Run readiness validation (no cluster mutation)
+        working-directory: Iskaar-deploy
+        env:
+          MONITORING: ${{ needs.normalize.outputs.monitoring }}
+          ENVIRONMENT: ${{ needs.normalize.outputs.environment }}
+          IMAGE_TAG: ${{ needs.normalize.outputs.image-tag }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy.sh
+          TAG_ARGS=()
+          if [ -n "${IMAGE_TAG}" ]; then
+            TAG_ARGS=(--tag "${IMAGE_TAG}")
+          fi
+          # Readiness path only. No KUBECONFIG, no Helm/kubectl mutation here;
+          # deploy.sh runs the read-only validate-readiness pipeline.
+          ./scripts/deploy.sh "${ENVIRONMENT}" --deploy false --monitoring "${MONITORING}" "${TAG_ARGS[@]}"
+
+      - name: Job summary
+        if: always()
+        env:
+          MODE: 'READINESS (deploy=false)'
+          ENVIRONMENT: ${{ needs.normalize.outputs.environment }}
+          IMAGE_TAG: ${{ needs.normalize.outputs.image-tag }}
+          MONITORING: ${{ needs.normalize.outputs.monitoring }}
+          DEPLOY_INPUT: ${{ needs.normalize.outputs.deploy }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          # No secret values are ever written to the job summary.
+          {
+            echo "## Iskaar CD Summary"
+            echo ""
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Mode | ${MODE} |"
+            echo "| Normalized deploy flag | ${DEPLOY_INPUT} |"
+            echo "| Environment | ${ENVIRONMENT} |"
+            echo "| Minikube profile | n/a (readiness) |"
+            echo "| Access mode | n/a (readiness) |"
+            echo "| Image tag | ${IMAGE_TAG} |"
+            echo "| Monitoring | ${MONITORING} |"
+            echo "| Cluster mutations | disabled |"
+            echo "| Triggered by | ${{ github.actor }} |"
+            echo "| Commit SHA | ${{ github.sha }} |"
+            echo "| Status | ${JOB_STATUS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Deploy mode (deploy=true). Runs ONLY on a self-hosted runner labelled
+  # `self-hosted` + `minikube`. GitHub-hosted runners cannot satisfy this label
+  # set, which prevents a real deployment from ever running on hosted infra.
+  # The local Minikube context is verified before the orchestrator is invoked,
+  # and the script itself owns the remaining target/secret/rollback guards.
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: normalize
+    if: needs.normalize.outputs.deploy == 'true'
+    runs-on: [self-hosted, minikube]
+    steps:
+      - name: Checkout deploy repository
+        uses: actions/checkout@v4
+        with:
+          path: Iskaar-deploy
+
+      - name: Checkout backend context
+        uses: actions/checkout@v4
+        with:
+          repository: breiti-eik/iskaar-be
+          path: iskaarBE/iskaar-be
+
+      - name: Checkout frontend context
+        uses: actions/checkout@v4
+        with:
+          repository: breiti-eik/Iskaar-fe
+          path: iskaarFE/iskaar-frontend
+
+      - name: Verify local Minikube context
+        working-directory: Iskaar-deploy
+        env:
+          MINIKUBE_PROFILE: ${{ vars.MINIKUBE_PROFILE || 'minikube' }}
+        run: |
+          set -euo pipefail
+          # Confirm this really is the local self-hosted Minikube runner before
+          # any deployment step runs. deploy.sh performs the authoritative
+          # target/context/registry checks; this is an early, non-mutating gate.
+          if ! command -v minikube >/dev/null 2>&1; then
+            echo "::error::minikube is not available on this runner; deploy=true requires a local Minikube runner."
+            exit 1
+          fi
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "::error::kubectl is not available on this runner; deploy=true requires a local Minikube runner."
+            exit 1
+          fi
+          CURRENT_CONTEXT="$(kubectl config current-context 2>/dev/null || true)"
+          if [ "$CURRENT_CONTEXT" != "$MINIKUBE_PROFILE" ]; then
+            echo "::error::Current kubectl context '${CURRENT_CONTEXT}' does not match the expected local Minikube profile '${MINIKUBE_PROFILE}'."
+            exit 1
+          fi
+          echo "Local Minikube context '${CURRENT_CONTEXT}' verified."
+
+      - name: Deploy to local Minikube via deploy.sh
+        working-directory: Iskaar-deploy
+        env:
+          MONITORING: ${{ needs.normalize.outputs.monitoring }}
+          IMAGE_TAG: ${{ needs.normalize.outputs.image-tag }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy.sh
+          TAG_ARGS=()
+          if [ -n "${IMAGE_TAG}" ]; then
+            TAG_ARGS=(--tag "${IMAGE_TAG}")
+          fi
+          # deploy=true is restricted to the local dev Minikube target. The
+          # orchestrator owns Minikube setup, phased Helm mutation, smoke tests,
+          # and rollback. No direct helm/kubectl mutation happens in this workflow.
+          ./scripts/deploy.sh dev --deploy true --monitoring "${MONITORING}" "${TAG_ARGS[@]}"
+
+      - name: Job summary
+        if: always()
+        env:
+          MODE: 'DEPLOY (deploy=true)'
+          ENVIRONMENT: 'dev'
+          IMAGE_TAG: ${{ needs.normalize.outputs.image-tag }}
+          MONITORING: ${{ needs.normalize.outputs.monitoring }}
+          MINIKUBE_PROFILE: ${{ vars.MINIKUBE_PROFILE || 'minikube' }}
+          ACCESS_MODE: ${{ vars.ACCESS_MODE || 'auto' }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          # No secret values are ever written to the job summary.
+          {
+            echo "## Iskaar CD Summary"
+            echo ""
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Mode | ${MODE} |"
+            echo "| Normalized deploy flag | true |"
+            echo "| Environment | ${ENVIRONMENT} |"
+            echo "| Minikube profile | ${MINIKUBE_PROFILE} |"
+            echo "| Access mode | ${ACCESS_MODE} |"
+            echo "| Image tag | ${IMAGE_TAG} |"
+            echo "| Monitoring | ${MONITORING} |"
+            echo "| Cluster mutations | enabled for local Minikube only |"
+            echo "| Triggered by | ${{ github.actor }} |"
+            echo "| Commit SHA | ${{ github.sha }} |"
+            echo "| Status | ${JOB_STATUS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
