@@ -34,7 +34,7 @@ CLUSTER_ISSUER_TIMEOUT="${CLUSTER_ISSUER_TIMEOUT:-60}"
 ACCESS_TIMEOUT="${ACCESS_TIMEOUT:-60}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-60}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.17.2}"
-BACKEND_CONTEXT="${BACKEND_CONTEXT:-../iskaarBE/iskaar-be}"
+BACKEND_CONTEXT="${BACKEND_CONTEXT:-../iskaarBE}"
 FRONTEND_CONTEXT="${FRONTEND_CONTEXT:-../iskaarFE/iskaar-frontend}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -131,7 +131,7 @@ Configuration (environment variables):
   MINIKUBE_SETUP_SCRIPT Minikube setup helper path (default: scripts/minikube-setup.sh)
   BUILD_TIMEOUT        Max build duration in seconds (default: 300)
   ROLLOUT_TIMEOUT      Max rollout duration in seconds (default: 120)
-  BACKEND_CONTEXT      Docker build context for backend (default: ../iskaarBE/iskaar-be)
+  BACKEND_CONTEXT      Docker build context for backend (default: ../iskaarBE)
   FRONTEND_CONTEXT     Docker build context for frontend (default: ../iskaarFE/iskaar-frontend)
   POSTGRES_SECRET_FILE Local secret env file below secrets/ (default: secrets/postgres.env)
   READINESS_VALIDATOR  Readiness validator path (default: scripts/validate-readiness.sh)

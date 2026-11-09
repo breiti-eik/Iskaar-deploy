@@ -30,7 +30,7 @@ Kubernetes-Manifeste unter [`../k8s/`](../k8s/), TLS-/Tunnel-Details in
 
 ### Beide Modi
 - Die drei Repos liegen als Geschwister-Verzeichnisse im Workspace
-  (`../iskaarBE/iskaar-be`, `../iskaarFE/iskaar-frontend`). Overridebar über
+  (`../iskaarBE`, `../iskaarFE/iskaar-frontend`). Overridebar über
   `BACKEND_CONTEXT` und `FRONTEND_CONTEXT`.
 - Werkzeuge auf dem `PATH`: `git`, `docker`, `helm`, `kubectl`, `minikube`,
   `curl` (unter Windows/WSL werden auch die `.exe`-Varianten erkannt).

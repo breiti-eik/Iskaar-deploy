@@ -57,7 +57,7 @@ Workspace/
 └── docs/                        # Übergreifende Dokumentation, Roadmap
 ```
 
-> **Wichtig:** Die `docker-compose.full-stack.yml` referenziert die Geschwister-Repos über relative Pfade (`../iskaarBE/iskaar-be`, `../iskaarFE/iskaar-frontend`). Die Verzeichnisstruktur darf nicht geändert werden, sonst schlägt der Build fehl.
+> **Wichtig:** Die `docker-compose.full-stack.yml` referenziert die Geschwister-Repos über relative Pfade (`../iskaarBE`, `../iskaarFE/iskaar-frontend`). Die Verzeichnisstruktur darf nicht geändert werden, sonst schlägt der Build fehl.
 
 ---
 
